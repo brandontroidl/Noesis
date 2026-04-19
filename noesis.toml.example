@@ -1,0 +1,111 @@
+debug = false
+# ==========================================================================
+# Acid — Example Configuration
+# ==========================================================================
+# Copyright (c) Cathexis Development
+#
+# MINIMUM changes required:
+#   1. [server]  — name, numeric, description
+#   2. [uplink]  — host, port, password (must match ircd Connect block)
+#   3. [uplink]  — hmac_key (must match link password for HMAC signing)
+#   4. [services.privileges] — owners list
+# ==========================================================================
+
+[server]
+name        = "acid.example.org"
+numeric     = 10
+description = "Network Services"
+max_clients = 64
+db_encryption_key = ""
+
+[uplink]
+host     = "127.0.0.1"
+port     = 4401
+password = "$LINK_PASSWORD"
+tls      = true
+tls_skip_verify = true
+
+# S2S HMAC — signs every outgoing P10 line with HMAC-SHA256.
+# Only needed if the ircd Connect block has "hmac = yes".
+hmac_key        = "$LINK_PASSWORD"
+hmac_scheme     = "cathexis-s2s-hmac-v1"
+hmac_key_derive = "hmac-sha256"
+
+[services]
+prefix = "!"
+
+[services.privileges]
+owners = ["admin"]
+admins = []
+opers  = []
+
+[services.flood]
+max_per_second = 5
+max_burst      = 10
+cooldown_secs  = 30
+
+[ircv3]
+enable_tags      = true
+enable_bot_mode  = true
+
+# --- Modules ---
+
+[modules.rootserv]
+enabled = true
+nick    = "RootServ"
+ident   = "root"
+gecos   = "Services Root Administration"
+
+[modules.moo]
+enabled = true
+nick    = "Moo"
+ident   = "moo"
+gecos   = "Network Monitoring Service"
+
+[modules.dronescan]
+enabled = true
+nick    = "DroneScan"
+ident   = "drone"
+gecos   = "Drone Detection Service"
+
+[modules.limitserv]
+enabled = true
+nick    = "LimitServ"
+ident   = "limitserv"
+gecos   = "Channel Limit Service"
+padding = 5
+interval = 60
+
+[modules.trapbot]
+enabled  = true
+nick     = "Trap"
+ident    = "trap"
+gecos    = "Trap Channel Monitor"
+channels = ["#trap1"]
+action   = "gline"
+duration = 86400
+reason   = "Trapped: unauthorized channel access"
+
+[modules.vizon]
+enabled = true
+nick    = "V"
+ident   = "vizon"
+gecos   = "Network Monitor"
+
+[modules.ctcp]
+enabled       = true
+version_reply = "Acid Services"
+
+[modules.dnsbl]
+enabled = false
+
+[modules.proxyscan]
+enabled = false
+
+[modules.track]
+enabled = true
+channel = "#opers"
+
+[modules.webhooks]
+enabled = false
+

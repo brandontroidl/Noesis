@@ -1,0 +1,138 @@
+# acid.toml — Acid P10 Services Configuration
+# Copyright (c) Cathexis Development
+
+# Enable debug logging (raw P10 lines, dispatch info)
+debug = false
+
+[server]
+name = "services.example.net"
+numeric = 42
+description = "Acid P10 Services"
+max_clients = 64
+
+[uplink]
+host = "irc.example.net"
+port = 4400
+password = "linkpassword"
+tls = true
+tls_cert = ""
+tls_key = ""
+tls_ca = ""
+
+# S2S HMAC-SHA256 authentication
+hmac_key = "your-hmac-secret-key-here"
+hmac_scheme = "cathexis-s2s-hmac-v1"
+
+[services]
+prefix = "!"
+
+[services.privileges]
+owners = ["admin"]
+admins = ["oper1", "oper2"]
+opers = []
+chan_admins = []
+helpers = []
+
+[services.flood]
+max_per_second = 5
+max_burst = 10
+cooldown_secs = 30
+
+[ircv3]
+# Enable IRCv3 message tag generation on outgoing P10 lines
+# Tags: @time, @msgid, @account, draft/bot
+enable_tags = true
+
+# Set +B (bot mode) on all pseudo-clients per IRCv3 bot-mode spec
+enable_bot_mode = true
+
+# Enable CHATHISTORY XQUERY handling (stores messages to data/history/)
+enable_chathistory = false
+
+# Max messages stored per channel (default 10000)
+max_history_per_channel = 10000
+
+# --- Modules ---
+
+[modules.trivia]
+enabled = false
+nick = "Trivia"
+ident = "trivia"
+gecos = "Trivia Game Service"
+question_file = "data/trivia.json"
+round_time = 30
+
+[modules.quotes]
+enabled = false
+nick = "Quotes"
+ident = "quotes"
+gecos = "Quote Database"
+data_file = "data/quotes.json"
+
+[modules.xmas]
+enabled = false
+nick = "Xmas"
+ident = "xmas"
+gecos = "Seasonal Events"
+
+[modules.limitserv]
+enabled = false
+nick = "LimitServ"
+ident = "limitserv"
+gecos = "Channel Limit Service"
+padding = 5
+interval = 60
+
+[modules.trapbot]
+enabled = false
+nick = "TrapBot"
+ident = "trap"
+gecos = "Trap Channel Monitor"
+channels = ["#trap1", "#trap2"]
+action = "gline"
+duration = 3600
+reason = "Honeypot channel join detected"
+
+[modules.ctcp]
+enabled = true
+version_reply = "acid 1.9.0 - Cathexis P10 Services"
+
+[modules.vizon]
+enabled = false
+nick = "Vizon"
+ident = "vizon"
+gecos = "Network Monitor"
+
+[modules.listbots]
+enabled  = false
+nick     = "ListBots"
+ident    = "listbots"
+gecos    = "Network Bot Directory"
+data_file = "data/listbots.json"
+
+[modules.registration]
+enabled      = false
+nick         = "Registrar"
+ident        = "registrar"
+gecos        = "Channel Registration Greeter"
+log_channel  = ""   # e.g. "#services" to audit every greeting
+welcome_lines = [
+    "Your channel has been registered. Type /msg ChanServ HELP for commands.",
+    "For help with network features, type /msg Global HELP.",
+]
+
+[modules.internets]
+enabled         = false
+nick            = "Internets"
+ident           = "internets"
+gecos           = "Internet Search and Utility Bot"
+openweather_key = ""
+google_key      = ""
+google_search_cx = ""
+bing_key        = ""
+steam_key       = ""
+lastfm_key      = ""
+twitch_client_id = ""
+twitch_secret   = ""
+youtube_key     = ""
+wolfram_app_id  = ""

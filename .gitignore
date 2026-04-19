@@ -1,0 +1,23 @@
+# Binary
+internets
+acid
+
+# Data files (runtime generated)
+data/
+*.db
+*.sqlite
+
+# Config with secrets (use acid.toml.example as template)
+# acid.toml
+
+# Editor/IDE
+*~
+.vscode/
+.*.sw?
+
+# Go build
+vendor/
+
+# OS
+.DS_Store
+Thumbs.db
