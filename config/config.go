@@ -43,7 +43,7 @@ type UplinkConfig struct {
 
 	// S2S HMAC-SHA256 authentication
 	HMACKey       string `toml:"hmac_key"`
-	HMACScheme    string `toml:"hmac_scheme"`    // cathexis-s2s-hmac-v1 or sacert-v1
+	HMACScheme    string `toml:"hmac_scheme"`    // cathexis-s2s-hmac-sha3-v2 (default, for Cathexis 1.6.0+) or cathexis-s2s-hmac-v1 (legacy)
 	HMACKeyDerive string `toml:"hmac_key_derive"` // key derivation method
 
 	// TLS verification — set true for self-signed certs or IP-only connections
@@ -387,6 +387,35 @@ type SentinelConfig struct {
 	TTLHours      int            `toml:"ttl_hours"`
 	ExemptIPs     []string       `toml:"exempt_ips"`
 	Rules         []SentinelRule `toml:"rules"`
+
+	// DNSBL weighted-scoring layer. Cathexis IRCd handles the actual
+	// zone lookups in s_auth.c (up to 3 zones, binary listed/not-listed)
+	// and emits an extended MARK with pipe-separated zone names:
+	//   MARK <client> DNSBL|dnsbl.dronebl.org|rbl.efnetrbl.org
+	// Sentinel parses the zone list, applies configured weights, and
+	// escalates (warn, gline) on threshold breach.
+	DNSBLScoring DNSBLScoringConfig `toml:"dnsbl_scoring"`
+}
+
+// DNSBLScoringConfig controls how Sentinel weights multi-zone DNSBL marks.
+// Set Enabled=true and keep Cathexis's FEAT_DNSBL_REJECT=false so listed
+// clients get marked (not kicked). Sentinel then scores and decides whether
+// they warrant a gline.
+type DNSBLScoringConfig struct {
+	Enabled        bool              `toml:"enabled"`
+	WarnThreshold  int               `toml:"warn_threshold"`
+	GlineThreshold int               `toml:"gline_threshold"`
+	GlineDuration  int               `toml:"gline_duration"`  // seconds
+	GlineReason    string            `toml:"gline_reason"`
+	MarkPrefix     string            `toml:"mark_prefix"`      // matches Cathexis FEAT_DNSBL_MARK, default "DNSBL"
+	AlertChannel   string            `toml:"alert_channel"`    // empty falls back to SentinelConfig.AlertChannel
+	Zones          []DNSBLZoneWeight `toml:"zones"`
+}
+
+type DNSBLZoneWeight struct {
+	Zone        string `toml:"zone"`
+	Weight      int    `toml:"weight"`
+	Description string `toml:"description"`
 }
 
 type SentinelRule struct {

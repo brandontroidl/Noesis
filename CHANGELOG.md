@@ -1,5 +1,65 @@
 # Noesis Changelog
 
+## 1.1.0 (2026-04-19) — Cathexis 1.6.0 alignment + Sentinel DNSBL scoring
+
+Matches the Cathexis 1.6.0 post-quantum s2s crypto upgrade. Adds weighted DNSBL reputation scoring to the Sentinel abuse-detection module.
+
+### S2S cryptography — HMAC-SHA3-512 (breaking)
+`server/s2s_crypto.go` is rewritten to default to the `cathexis-s2s-hmac-sha3-v2` scheme:
+- **Key derivation**: HKDF-SHA3-512 (replaces HMAC-SHA256 as the KDF)
+- **Per-message tag**: HMAC-SHA3-512, 64-byte / 128-hex-char output (was HMAC-SHA256 / 32-byte / 64-hex)
+- **Labels**: `cathexis-s2s-hmac-sha3-v2` and `cathexis-s2s-sacert-sha3-v2` (was `cathexis-s2s-hmac-v1` / `sacert-v1`)
+- **Challenge binding**: challenge bound into HKDF `info` field so derived keys can't be replayed across challenges
+
+Legacy v1 (HMAC-SHA256) is retained as an explicit opt-in scheme. Set `hmac_scheme = "cathexis-s2s-hmac-v1"` in the `[network]` stanza of `noesis.toml` during transition windows when linking to a pre-1.6.0 Cathexis. Default (empty scheme) is v2.
+
+**Interop**: Noesis 1.1.0 talks to Cathexis 1.6.0+ only when both use v2. During migration either set the scheme override, or upgrade Cathexis → Synaxis → Noesis in close sequence.
+
+### New dependency
+`golang.org/x/crypto v0.28.0` for `sha3` and `hkdf` packages (Go 1.22's stdlib doesn't include these yet; 1.24+ would). Run `go mod tidy` on first build.
+
+### Sentinel — weighted DNSBL scoring
+`modules/sentinel.go` now parses Cathexis 1.5.6+ extended DNSBL marks (`DNSBL|zone1|zone2|...`), sums per-zone weights from `[modules.sentinel.dnsbl_scoring]`, and drives automated response:
+- **score ≥ gline_threshold** → GLINE the IP for `dnsbl_gline_duration` seconds
+- **score ≥ warn_threshold** → NOTICE to `alert_channel`
+- **score < warn_threshold** → log-only
+
+Zones not in the weights table default to weight 1. Set a zone to weight 0 to observe without contributing to the score (useful for noisy RBLs you want to track but not act on). The `[modules.sentinel.dnsbl_scoring.descriptions]` map provides human-readable zone labels for logs and alert messages.
+
+Default thresholds in `noesis.toml.example`: warn=3, gline=7, gline duration=3600s, with DroneBL weighted 3, EFnet RBL + Tor exit list + Cerberus each weighted 2.
+
+### Server dispatch fix
+`server/server.go` routes MARK commands to all modules (previously swallowed before module dispatch). `HandleMessage` in Sentinel fast-paths MARK to the new `handleDNSBLMark` parser when the DNSBL score path is enabled.
+
+### CTCP VERSION
+`modules/ctcp.go` — reply bumped to `"noesis 1.1.0 - Cathexis P10 Services Framework"`.
+
+### Config additions (`noesis.toml.example`)
+```toml
+[modules.sentinel]
+enabled = true
+alert_channel = "#opers"
+dnsbl_warn_threshold = 3
+dnsbl_gline_threshold = 7
+dnsbl_gline_duration = 3600
+dnsbl_gline_reason = "…"
+dnsbl_mark_prefix = "DNSBL"
+
+[modules.sentinel.dnsbl_scoring]
+"dnsbl.dronebl.org" = 3
+"rbl.efnetrbl.org"  = 2
+"torexit.dan.me.uk" = 2
+
+[modules.sentinel.dnsbl_scoring.descriptions]
+# optional human labels for each zone
+```
+
+### Migration
+1. Build: `go mod tidy && go build ./...`
+2. If Cathexis peer is still pre-1.6.0: add `hmac_scheme = "cathexis-s2s-hmac-v1"` to your `[network]` stanza until the peer upgrades
+3. If Cathexis peer is already 1.6.0 (recommended path): default (empty) scheme works; no config change needed
+4. DNSBL weights are opt-in — module works with Cathexis's existing `DNSBL_MARK` feature. Extended marks (`DNSBL|zone|zone|...`) require Cathexis 1.5.6+; older Cathexis emits the bare prefix and Sentinel treats it as a single unlabeled hit
+
 ## 1.0.1 (2026-04-19) — Retire GameServ/WeatherBot, absorb Synaxis BotServ toys
 
 Consolidation release to resolve command collisions with Synaxis and within Noesis itself. No functional loss — every command removed has a live home elsewhere.

@@ -38,7 +38,7 @@ func (c *CTCP) Init(s *server.Server) error {
 
 	c.versionReply = cfg.VersionReply
 	if c.versionReply == "" {
-		c.versionReply = "noesis 1.0.1 - Cathexis P10 Services Framework"
+		c.versionReply = "noesis 1.1.0 - Cathexis P10 Services Framework"
 	}
 
 	log.Printf("[%s] initialized", c.Name())

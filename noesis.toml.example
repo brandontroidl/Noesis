@@ -109,3 +109,44 @@ channel = "#opers"
 [modules.webhooks]
 enabled = false
 
+# ─────────────────────────────────────────────────────────────────────
+# Sentinel — abuse-detection module
+#
+# Parses Cathexis 1.5.6+ extended DNSBL marks ("DNSBL|zone1|zone2"),
+# sums per-zone weights to produce a score, and drives automated
+# warn/gline response. Scores accumulate across zones hit by the same
+# connection, so a host listed in multiple RBLs gets harsher treatment.
+# ─────────────────────────────────────────────────────────────────────
+[modules.sentinel]
+enabled               = true
+# Alert channel for WARN events (below gline threshold).
+alert_channel         = "#opers"
+# Per-event score thresholds:
+#   score >= gline_threshold → GLINE for gline_duration seconds
+#   score >= warn_threshold  → NOTICE to alert_channel
+#   score <  warn_threshold  → log-only
+dnsbl_warn_threshold  = 3
+dnsbl_gline_threshold = 7
+dnsbl_gline_duration  = 3600
+dnsbl_gline_reason    = "Your connection was flagged by multiple DNS blocklists. Visit https://dronebl.org/lookup for delisting."
+# Prefix for marks emitted by Cathexis (usually matches DNSBL_MARK there).
+dnsbl_mark_prefix     = "DNSBL"
+
+[modules.sentinel.dnsbl_scoring]
+# Per-zone weights. Zones not listed here default to weight 1.
+# Keys must match the zone strings Cathexis emits in DNSBL marks
+# (typically the DNSBL_HOST / DNSBL_HOST2 / DNSBL_HOST3 values).
+# Use weight 0 to observe a zone without contributing to the score.
+"dnsbl.dronebl.org"     = 3   # aggressive — drone/bot network detection
+"rbl.efnetrbl.org"      = 2   # proxy / Tor exit detection
+"torexit.dan.me.uk"     = 2   # Tor exit list (specific)
+"cerberus.example.org"  = 2   # your own Cerberus zone if running
+# Example: weight 0 to log without auto-action:
+# "some-noisy.rbl.example" = 0
+
+# Per-zone human descriptions (for logging and alert channel messages).
+[modules.sentinel.dnsbl_scoring.descriptions]
+"dnsbl.dronebl.org"     = "DroneBL — known drone/bot IP"
+"rbl.efnetrbl.org"      = "EFnet RBL — proxy/Tor exit"
+"torexit.dan.me.uk"     = "Tor exit node"
+"cerberus.example.org"  = "Cerberus — local reputation DB"

@@ -497,7 +497,14 @@ func (s *Server) processMainMessage(msg *ircv3.P10Message) {
 	case "Y", "ERROR":
 		log.Printf("[ERROR] from server: %s", msg.Trailing())
 	// P10 commands that don't need processing by services
-	case "MK", "MARK":     // server metadata markers
+	case "MK", "MARK":
+		// Server metadata markers. Broadcast to modules so Sentinel can
+		// score DNSBL marks emitted by Cathexis 1.5.6+. Modules that don't
+		// care return early; Sentinel parses the zone list in the mark
+		// and applies weighted scoring.
+		for _, m := range s.modules {
+			m.HandleMessage(s, msg)
+		}
 	case "PRIVS":          // oper privilege display
 	case "SNO":            // server notice routing
 	case "OM", "OPMODE":   // oper mode changes (already handled by M/MODE)

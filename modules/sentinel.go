@@ -69,6 +69,17 @@ type Sentinel struct {
 	httpClient    *http.Client
 	stats         sentinelStats
 	stopCh        chan struct{}
+
+	// DNSBL weighted-scoring layer (parses Cathexis 1.5.6+ MARKs).
+	dnsblEnabled        bool
+	dnsblWarnThreshold  int
+	dnsblGlineThreshold int
+	dnsblGlineDuration  int
+	dnsblGlineReason    string
+	dnsblMarkPrefix     string
+	dnsblAlertChannel   string
+	dnsblZoneWeights    map[string]int    // zone (lowercased) -> weight
+	dnsblZoneDescs      map[string]string // zone -> description
 }
 
 type sentinelStats struct {
@@ -127,6 +138,33 @@ func (s *Sentinel) Init(srv *server.Server) error {
 	s.rules = cfg.Rules
 	if len(s.rules) == 0 { s.rules = defaultRules }
 	for _, ip := range cfg.ExemptIPs { s.exemptIPs[ip] = true }
+
+	// DNSBL weighted-scoring layer — reads Cathexis 1.5.6+ extended marks.
+	ds := cfg.DNSBLScoring
+	s.dnsblEnabled = ds.Enabled
+	s.dnsblZoneWeights = make(map[string]int)
+	s.dnsblZoneDescs = make(map[string]string)
+	if s.dnsblEnabled {
+		s.dnsblWarnThreshold = ds.WarnThreshold
+		if s.dnsblWarnThreshold <= 0 { s.dnsblWarnThreshold = 3 }
+		s.dnsblGlineThreshold = ds.GlineThreshold
+		if s.dnsblGlineThreshold <= 0 { s.dnsblGlineThreshold = 7 }
+		s.dnsblGlineDuration = ds.GlineDuration
+		if s.dnsblGlineDuration <= 0 { s.dnsblGlineDuration = 3600 }
+		s.dnsblGlineReason = ds.GlineReason
+		if s.dnsblGlineReason == "" {
+			s.dnsblGlineReason = "DNSBL score exceeded (listed in multiple zones)"
+		}
+		s.dnsblMarkPrefix = ds.MarkPrefix
+		if s.dnsblMarkPrefix == "" { s.dnsblMarkPrefix = "DNSBL" }
+		s.dnsblAlertChannel = ds.AlertChannel
+		if s.dnsblAlertChannel == "" { s.dnsblAlertChannel = s.alertChannel }
+		for _, z := range ds.Zones {
+			key := strings.ToLower(z.Zone)
+			s.dnsblZoneWeights[key] = z.Weight
+			s.dnsblZoneDescs[key] = z.Description
+		}
+	}
 
 	nick := cfg.Nick
 	if nick == "" { nick = "Sentinel" }
@@ -394,6 +432,17 @@ func (s *Sentinel) decayLoop() {
 
 func (s *Sentinel) HandleMessage(srv *server.Server, msg *ircv3.P10Message) {
 	if s.pc == nil { return }
+
+	// DNSBL weighted-scoring: parse MARK messages from Cathexis 1.5.6+.
+	// Wire format: <server> MK <target> MARK :DNSBL|zone1|zone2
+	// Legacy format from pre-1.5.6 Cathexis: same but with payload "DNSBL"
+	// (no zones). That still scores — we treat it as a single-weight match
+	// on whatever default weight is configured for the zone called "unknown".
+	if (msg.Command == "MK" || msg.Command == "MARK") && s.dnsblEnabled {
+		s.handleDNSBLMark(srv, msg)
+		return
+	}
+
 	if msg.Command != "P" && msg.Command != "PRIVMSG" { return }
 	if len(msg.Params) < 1 { return }
 	target := msg.Param(0)
@@ -503,4 +552,138 @@ func (s *Sentinel) Shutdown() {
 	defer s.mu.Unlock()
 	log.Printf("[%s] shutdown — tracked %d IPs, listed %d, glined %d",
 		s.Name(), len(s.records), s.stats.ipsListed, s.stats.glinesIssued)
+}
+
+// ── DNSBL weighted scoring (Cathexis 1.5.6+) ────────────────────────
+
+// handleDNSBLMark parses an extended DNSBL mark emitted by Cathexis's
+// s_auth.c and applies weighted scoring + threshold actions.
+//
+// Wire format sent by Cathexis 1.5.6:
+//   <serverprefix> MK <client-nick-or-numeric> MARK :DNSBL|zone1|zone2
+//
+// - param[0] = client identifier (nick or numeric)
+// - param[1] = mark sub-type ("MARK" or "DNSBL_DATA")
+// - param[2] = the mark payload, "<prefix>|<zone>|<zone>|..."
+//
+// Pre-1.5.6 Cathexis sends "DNSBL" with no zones; that case scores as
+// a single unrecognized hit (no weight, no action) so behavior degrades
+// gracefully when Cathexis hasn't been upgraded yet.
+func (s *Sentinel) handleDNSBLMark(srv *server.Server, msg *ircv3.P10Message) {
+	if len(msg.Params) < 3 {
+		return
+	}
+	targetID := msg.Params[0]
+	subType := strings.ToUpper(msg.Params[1])
+	if subType != "MARK" && subType != "DNSBL_DATA" {
+		return
+	}
+	payload := msg.Params[2]
+	if payload == "" {
+		return
+	}
+
+	// Only handle marks that start with the configured prefix (default "DNSBL").
+	// Skip other mark types (GEOIP, WEBIRC, CVERSION, SSLCLIFP, KILL).
+	parts := strings.Split(payload, "|")
+	if !strings.EqualFold(parts[0], s.dnsblMarkPrefix) {
+		return
+	}
+
+	// Resolve target to a user record so we can alert / gline meaningfully.
+	u := srv.Network().GetUser(targetID)
+	if u == nil {
+		// Maybe it's a nick instead of a numeric; try that path.
+		u = srv.Network().FindUserByNick(targetID)
+	}
+	if u == nil {
+		return
+	}
+	if s.isExempt(u.IP) {
+		return
+	}
+
+	// Score: sum configured weights for each recognized zone.
+	zones := parts[1:]
+	score := 0
+	hit := make([]string, 0, len(zones))
+	unknown := make([]string, 0)
+	for _, z := range zones {
+		z = strings.TrimSpace(strings.ToLower(z))
+		if z == "" {
+			continue
+		}
+		if w, ok := s.dnsblZoneWeights[z]; ok {
+			score += w
+			hit = append(hit, fmt.Sprintf("%s(w%d)", z, w))
+		} else {
+			unknown = append(unknown, z)
+		}
+	}
+
+	// Log + count all hits (even zero-score ones are useful telemetry).
+	s.mu.Lock()
+	s.stats.eventsProcessed++
+	s.mu.Unlock()
+
+	if score == 0 && len(unknown) == 0 {
+		// Bare "DNSBL" mark from pre-1.5.6 Cathexis, or no matching zones.
+		// Quietly log and return without action.
+		log.Printf("[sentinel/dnsbl] %s (%s) DNSBL-marked with no zone info (upgrade Cathexis to 1.5.6 for weighted scoring)",
+			u.Nick, u.IP)
+		return
+	}
+
+	mask := fmt.Sprintf("%s!%s@%s", u.Nick, u.Ident, u.Host)
+	target := s.dnsblAlertChannel
+
+	// GLINE at or above gline_threshold.
+	if score >= s.dnsblGlineThreshold {
+		s.mu.Lock()
+		s.stats.glinesIssued++
+		s.mu.Unlock()
+		go func() {
+			_ = srv.SendP10(&ircv3.P10Message{
+				Source:  srv.ServerNumeric(),
+				Command: "GL",
+				Params: []string{
+					"*",
+					"+*@" + u.IP,
+					fmt.Sprintf("%d", s.dnsblGlineDuration),
+					s.dnsblGlineReason,
+				},
+			})
+		}()
+		if target != "" {
+			_ = srv.SendPrivmsg(s.pc.Numeric, target, fmt.Sprintf(
+				"\x0304[SENTINEL/DNSBL GLINE]\x03 %s score=%d zones=[%s] — G-lined *@%s for %ds",
+				mask, score, strings.Join(hit, ", "), u.IP, s.dnsblGlineDuration))
+		}
+		log.Printf("[sentinel/dnsbl] GLINE %s score=%d zones=[%s]",
+			mask, score, strings.Join(hit, ", "))
+		return
+	}
+
+	// WARN between warn_threshold and gline_threshold.
+	if score >= s.dnsblWarnThreshold {
+		if target != "" {
+			_ = srv.SendPrivmsg(s.pc.Numeric, target, fmt.Sprintf(
+				"\x0307[SENTINEL/DNSBL WARN]\x03 %s score=%d zones=[%s] (warn=%d gline=%d)",
+				mask, score, strings.Join(hit, ", "),
+				s.dnsblWarnThreshold, s.dnsblGlineThreshold))
+		}
+		log.Printf("[sentinel/dnsbl] WARN %s score=%d zones=[%s]",
+			mask, score, strings.Join(hit, ", "))
+		return
+	}
+
+	// Below warn threshold — just log for telemetry.
+	if len(hit) > 0 {
+		log.Printf("[sentinel/dnsbl] %s score=%d zones=[%s] (under warn=%d)",
+			mask, score, strings.Join(hit, ", "), s.dnsblWarnThreshold)
+	}
+	if len(unknown) > 0 {
+		log.Printf("[sentinel/dnsbl] %s unknown zones in mark: [%s] (add to dnsbl_scoring.zones to score)",
+			mask, strings.Join(unknown, ", "))
+	}
 }
